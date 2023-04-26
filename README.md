@@ -1,0 +1,1 @@
+Assignments of CS5200 Database Management Systems

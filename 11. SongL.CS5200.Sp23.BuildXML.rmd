@@ -1,0 +1,26 @@
+---
+title: "Assignment / Build XML Structure"
+author: "Liyang Song"
+date: "4/4/2023"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+```{r}
+require(XML)
+require(RSQLite)
+
+xmlfn <- "SongL.CS5200.Sp23.BuildXML.xml"
+xmlDOM <- xmlParse(file = xmlfn, validate = T)
+```
+
+Q: use XPath to find the total number of visits for some page (pick one from your sample instances)
+
+```{r}
+xpathEx <- "count(//Visit[@pid='p2'])"
+num <- xpathSApply(xmlDOM, xpathEx)
+cat("The total number of visits for page pid='p2': ", num)
+```

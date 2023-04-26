@@ -1,0 +1,597 @@
+---
+title: "Practicum I CS5200"
+author: "Liyang Song"
+date: "Spring 2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+## 0. Clear Environment
+
+Remove all objects first to help with code tests.
+
+```{r removeObjects}
+rm(list = ls())
+```
+
+## 1. Connect to Database
+
+Local MySQL server was used to test the codes during development. After all works done, AWS RDS MySQL server was used to test the codes again.
+
+Tested MySQL version is `8.0.32`.
+
+```{r connectDB}
+require(RMySQL)
+require(sqldf)
+require(stringr)
+require(ggplot2)
+
+db_user <- 'root' 
+db_password <- 'liyang5200'
+db_name <- 'practicumi'
+db_host <- 'localHost'
+db_port <- 3306
+
+conn <-  dbConnect(RMySQL::MySQL(), 
+                   user = db_user, 
+                   password = db_password,
+                   dbname = db_name, 
+                   host = db_host, 
+                   port = db_port)
+```
+
+## 2. Create Database
+
+Some `DROP TABLE` statements were executed before creating tables. This can be useful during code test and debug.
+
+```{r dropTables}
+dbExecute(conn, "DROP TABLE IF EXISTS incidents")
+dbExecute(conn, "DROP TABLE IF EXISTS airports")
+dbExecute(conn, "DROP TABLE IF EXISTS conditions")
+dbExecute(conn, "DROP TABLE IF EXISTS airlines")
+```
+
+Create table `incidents` using information from `4.A`.
+
+9 columns were created including 1 PK and 3 FKs. In addition, 2 constraints were created to restrict `flight.phase` and `altitude`.
+
+All data types keep the same as instructions in this step.
+
+```{r createIncidents}
+sql_createIncidents = "CREATE TABLE IF NOT EXISTS incidents (
+                           rid INTEGER PRIMARY KEY,
+                           `dep.date` DATE,
+                           origin INTEGER,
+                           airline INTEGER,
+                           aircraft TEXT,
+                           `flight.phase` TEXT,
+                           altitude INTEGER,
+                           conditions TEXT,
+                           warned BOOLEAN,
+                           CONSTRAINT `chk_flight.phase` CHECK (`flight.phase` IN ('takeoff', 'inflight', 'landing', 'unknown')),
+                           CONSTRAINT chk_altitude CHECK (altitude >= 0))"
+
+dbExecute(conn, sql_createIncidents)
+```
+
+Create table `airports` using information from `4.B`.
+
+```{r createAirports}
+sql_createAirports = "CREATE TABLE IF NOT EXISTS airports (
+                          aid INTEGER PRIMARY KEY,
+                          airportName TEXT,
+                          airportCode TEXT,
+                          state TEXT)"
+
+dbExecute(conn, sql_createAirports)
+```
+
+Create link between `incidents` and `airports` using `origin` in `incidents` as FK.
+
+```{r linkIncidentsAirports}
+sql_linkIncidentsAirports = "ALTER TABLE incidents
+                             ADD CONSTRAINT fk_airports
+                             FOREIGN KEY (origin) REFERENCES airports(aid)"
+
+dbExecute(conn, sql_linkIncidentsAirports)
+```
+
+Create look up table `conditions` using information from `4.D`.
+
+```{r createTableConditions}
+sql_createConditions = "CREATE TABLE IF NOT EXISTS conditions (
+                            cid INTEGER PRIMARY KEY,
+                            `condition` TEXT,
+                            explanation TEXT)"
+
+dbExecute(conn, sql_createConditions)
+```
+
+Create link between `incidents` and `conditions` using `conditions` in `incidents` as FK. As column `conditions` was created above as `TEXT`, change it to `INTEGER` before adding FK constraint.
+
+```{r linkIncidentsConditions}
+sql_linkIncidentsConditions_1 = "ALTER TABLE incidents
+                                 MODIFY COLUMN conditions INTEGER"
+
+sql_linkIncidentsConditions_2 = "ALTER TABLE incidents
+                                 ADD CONSTRAINT fk_conditions
+                                 FOREIGN KEY (conditions) REFERENCES conditions(cid)"
+
+dbExecute(conn, sql_linkIncidentsConditions_1)
+dbExecute(conn, sql_linkIncidentsConditions_2)
+```
+
+Create table `airlines` using information from `4.E`.
+
+```{r createTableAirlines}
+sql_createAirlines = "CREATE TABLE IF NOT EXISTS airlines (
+                          eid INTEGER PRIMARY KEY,
+                          airlineName TEXT,
+                          airlineCode TEXT,
+                          flag TEXT)"
+
+dbExecute(conn, sql_createAirlines)
+```
+
+Create link between `incidents` and `airlines` using `airline` in `incidents` as FK.
+
+```{r linkIncidentsAirlines}
+sql_linkIncidentsAirlines = "ALTER TABLE incidents
+                             ADD CONSTRAINT fk_airlines
+                             FOREIGN KEY (airline) REFERENCES airlines(eid)"
+
+dbExecute(conn, sql_linkIncidentsAirlines)
+```
+
+All table have been created. Test table definitions with code chunks that are not evaluated when knitted `(eval = F)`.
+
+```{r testTableCreation_1, eval=FALSE}
+dbGetQuery(conn, "DESCRIBE incidents")
+```
+
+```{r testTableCreation_2, eval=FALSE}
+dbGetQuery(conn, "DESCRIBE airports")
+```
+
+```{r testTableCreation_3, eval=FALSE}
+dbGetQuery(conn, "DESCRIBE conditions")
+```
+
+```{r testTableCreation_4, eval=FALSE}
+dbGetQuery(conn, "DESCRIBE airlines")
+```
+
+## 3. Load CSV Data and Preprocess.
+
+Read CSV file from URL to a data frame.
+
+```{r loadCSV}
+fn <- "https://s3.us-east-2.amazonaws.com/artificium.us/datasets/BirdStrikesData-V2.csv"
+
+bds.raw <- read.csv(file = fn,
+                    header = T,
+                    stringsAsFactors = F)
+```
+
+Force `sqldf` to use `SQLite` as its backing store when manipulating data frames. MySQL would have security constraints.
+
+```{r setSqldf}
+options(sqldf.driver = 'SQLite')
+```
+
+The first step of data preprocess is to deal with all empty data. Most will be replaced with `'unknown'`.
+
+Any empty data in column `flight_date` will be replaced with a very early date (`'1/1/1900 00:00:00 AM'`).
+
+Besides empty data, column `origin` has some `'N/A'` which will also be replaced with `'unknown'`.
+
+```{r nullCases}
+bds.raw$flight_date <- ifelse(bds.raw$flight_date == '', '1/1/1900 00:00:00 AM', bds.raw$flight_date)
+bds.raw$aircraft <- ifelse(bds.raw$aircraft == '', 'unknown', bds.raw$aircraft)
+bds.raw$flight_phase <- ifelse(bds.raw$flight_phase == '', 'unknown', bds.raw$flight_phase)
+bds.raw$altitude_ft <- ifelse(bds.raw$altitude_ft == '', '0', bds.raw$altitude_ft)
+
+bds.raw$airport <- ifelse(bds.raw$airport == '', 'unknown', bds.raw$airport)
+bds.raw$origin <- ifelse(bds.raw$origin == '', 'unknown', bds.raw$origin)
+bds.raw$origin <- ifelse(bds.raw$origin == 'N/A', 'unknown', bds.raw$origin)
+
+bds.raw$sky_conditions <- ifelse(bds.raw$sky_conditions == '', 'unknown', bds.raw$sky_conditions)
+
+bds.raw$airline <- ifelse(bds.raw$airline == '', 'unknown', bds.raw$airline)
+```
+
+The second step of data preprocess is to change types of data frame columns. To execute `dbWriteTable` to database tables, the column names and data types of data frames have to be the same as database tables.
+
+Write a `getDate` function to transfer `TEXT` dates in column `flight_date` of original CSV file to `DATE` format. Their type will still be `TEXT`, as writing `DATE` data from data frames to MySQL will become `REAL` data. While writing `TEXT` data in `DATE` format (YYYY-MM-DD) will become `DATE` data in MySQL.
+
+```{r dateTypeFunction}
+getDate <- function(s) {
+    groups <- str_match(s, "(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4}).+")
+    groups[ ,2] <- ifelse(nchar(groups[ ,2]) != 2, paste0(0, groups[ ,2]), groups[ ,2])
+    groups[ ,3] <- ifelse(nchar(groups[ ,3]) != 2, paste0(0, groups[ ,3]), groups[ ,3])
+    date <- paste0(groups[ ,4], "-", groups[ ,2], "-", groups[ ,3])
+    
+    return(date)
+}
+```
+
+Write a `getPhase` function to map flight phases in column `flight_phase` of original CSV file to `{inflight, landing, takeoff, unknown}` four types.
+
+```{r phaseTypeFunction}
+getPhase <- function(s) {
+    phaseMap <- data.frame(Col1 = c('Approach', 'Climb', 'Descent', 'Landing Roll', 'Parked', 'Take-off run', 'Taxi', 'unknown'),
+                           Col2 = c('inflight', 'inflight', 'inflight', 'landing', 'landing', 'takeoff', 'takeoff ', 'unknown'))
+  
+    phase <- phaseMap$Col2[match(s, phaseMap$Col1)]
+    return(phase)
+}
+```
+
+Typecast all columns in `bds.raw` to make them the same types as desired database tables.
+
+```{r typecast}
+bds.raw$flight_date <- getDate(bds.raw$flight_date)
+
+bds.raw$flight_phase <- getPhase(bds.raw$flight_phase)
+
+bds.raw$altitude_ft <- sub("[,]", "", bds.raw$altitude_ft)
+bds.raw$altitude_ft <- as.integer(bds.raw$altitude_ft)
+
+bds.raw$pilot_warned_flag <- ifelse(bds.raw$pilot_warned_flag == "Y", TRUE, FALSE)
+```
+
+## 4. Load Data to Dataframes
+
+Use `sqldf` to query from processed `bds.raw` to different data frames.
+
+**bds.incidents**
+
+FKs `origin`, `airline`, `conditions` were initialized as 1, and would be changed later according to PKs in other data frames. Their types were all changed to INTEGER.
+
+```{r getIncidentsData}
+bds.incidents <- sqldf::sqldf("SELECT rid,
+                                      flight_date AS `dep.date`,
+                                      1 AS origin,
+                                      1 AS airline,
+                                      aircraft,
+                                      flight_phase AS `flight.phase`,
+                                      altitude_ft AS altitude,
+                                      1 AS conditions,
+                                      pilot_warned_flag AS warned
+                               FROM `bds.raw`")
+```
+
+```{r typecastIncidentsFK}
+bds.incidents$origin <- as.integer(bds.incidents$origin)
+bds.incidents$airline <- as.integer(bds.incidents$airline)
+bds.incidents$conditions <- as.integer(bds.incidents$conditions)
+```
+
+**bds.airports**
+
+`aid` was initialized as 1, and then changed to a sequence from 1 to total row number to make sure it is unique as PK.
+
+`airportCode` was left as empty TEXT (but not NULL).
+
+```{r getAirportsData}
+bds.airports <- sqldf::sqldf("SELECT 1 AS aid,
+                                     airport AS airportName,
+                                     '' AS airportCode,
+                                     origin AS state
+                              FROM `bds.raw`
+                              GROUP BY airportName, state")
+n.airports <- nrow(bds.airports)
+bds.airports$aid <- seq(1, n.airports)
+```
+
+**bds.conditions**
+
+`cid` was initialized as 1, and then changed to a sequence from 1 to total row number to make sure it is unique as PK.
+
+`explanation` was left as empty TEXT (but not NULL).
+
+```{r getConditionsData}
+bds.conditions <- sqldf::sqldf("SELECT 1 AS cid,
+                                       sky_conditions AS `condition`,
+                                       '' AS explanation
+                                FROM `bds.raw`
+                                GROUP BY `condition`")
+n.conditions <- nrow(bds.conditions)
+bds.conditions$cid <- seq(1, n.conditions)
+```
+
+**bds.airlines**
+
+`eid` was initialized as 1, and then changed to a sequence from 1 to total row number to make sure it is unique as PK.
+
+`airlineCode` and `flag` were left as empty TEXT (but not NULL).
+
+```{r getAirlinesData}
+bds.airlines <- sqldf::sqldf("SELECT 1 AS eid,
+                                     airline AS airlineName,
+                                     '' AS airlineCode,
+                                     '' AS flag
+                              FROM `bds.raw`
+                              GROUP BY `airlineName`")
+n.airlines <- nrow(bds.airlines)
+bds.airlines$eid <- seq(1, n.airlines)
+```
+
+## 5. Link Dataframes
+
+`dbs.raw` was used to get correct FKs in `bds.incidents`. FKs were changed to set up links between `bds.incidents` and other 3 data frames. 
+
+```{r linkIncidentsAirportsDF}
+n.incidents <- nrow(bds.incidents)
+
+for (r in 1:n.incidents) {
+  a <- bds.airports$aid[which(bds.airports$airportName == bds.raw$airport[r] &
+                              bds.airports$state == bds.raw$origin[r])]
+  bds.incidents$origin[r] <- a
+}
+```
+
+```{r linkIncidentsConditionsDF}
+for (r in 1:n.incidents) {
+  a <- bds.conditions$cid[which(bds.conditions$condition == bds.raw$sky_conditions[r])]
+  bds.incidents$conditions[r] <- a
+}
+```
+
+```{r linkIncidentsAirlinesDF}
+for (r in 1:n.incidents) {
+  a <- bds.airlines$eid[which(bds.airlines$airlineName == bds.raw$airline[r])]
+  bds.incidents$airline[r] <- a
+}
+```
+
+## 6. Load Dataframes to Populate Database
+
+Now the 4 data frames should have the same data types and column names as the tables in MySQL database. Use `dbWriteTable` to load data frames into database tables.
+
+Notice that because of FK constraints, `incidents` should be loaded as the last one.
+
+```{r writeDatabase}
+dbWriteTable(conn, "airports", bds.airports, overwrite = F, append = T, row.names = F)
+dbWriteTable(conn, "conditions", bds.conditions, overwrite = F, append = T, row.names = F)
+dbWriteTable(conn, "airlines", bds.airlines, overwrite = F, append = T, row.names = F)
+dbWriteTable(conn, "incidents", bds.incidents, overwrite = F, append = T, row.names = F)
+```
+
+Test data loading results by displaying parts of each table.
+
+```{r showLoadedTable_1}
+dbGetQuery(conn, "SELECT * FROM incidents LIMIT 10")
+```
+
+```{r showLoadedTable_2}
+dbGetQuery(conn, "SELECT * FROM airports LIMIT 10")
+```
+
+```{r showLoadedTable_3}
+dbGetQuery(conn, "SELECT * FROM conditions LIMIT 10")
+```
+
+```{r showLoadedTable_4}
+dbGetQuery(conn, "SELECT * FROM airlines LIMIT 10")
+```
+
+## 7. Quries Against Database
+
+**Q1**: Find the 10 states with the greatest number of incidents. Display the state and the number of incidents.
+
+```{r query_1}
+sql_incidentsNumOfStates <- "SELECT a.state, COUNT(DISTINCT i.rid) AS incidentsNum
+                             FROM airports AS a
+                             LEFT JOIN incidents AS i
+                                 ON a.aid = i.origin
+                             GROUP BY a.state
+                             ORDER BY incidentsNum DESC
+                             LIMIT 10"
+dbGetQuery(conn, sql_incidentsNumOfStates)
+```
+
+**Q2**: Find the airlines that had an above average number bird strike incidents. List the names of the airlines and the number of incidents for each.
+
+```{r query_2}
+sql_incidentsNumOfAirlines <- "SELECT e.airlineName, COUNT(DISTINCT i.rid) AS incidentsNum
+                               FROM airlines AS e
+                               LEFT JOIN incidents AS i ON e.eid = i.airline
+                               GROUP BY e.airlineName
+                               HAVING incidentsNum > (
+                                   SELECT AVG(incidentsNum)
+                                   FROM (
+                                       SELECT e.airlineName, COUNT(DISTINCT i.rid) AS incidentsNum
+                                       FROM airlines AS e
+                                       LEFT JOIN incidents AS i ON e.eid = i.airline
+                                       GROUP BY e.airlineName
+                                   ) temp
+                               )
+                               ORDER BY incidentsNum DESC"
+dbGetQuery(conn, sql_incidentsNumOfAirlines)
+```
+
+**Q3**: Find the number of bird strike incidents by month and by flight phase (across all years). Save the result of the query in a dataframe. Include all airlines and all flights. Display the first six rows of the dataframe.
+
+```{r query_3}
+sql_incidentsNumOfMonthPhase <- "SELECT e.airlineName, MONTH(i.`dep.date`) AS month, i.`flight.phase`, COUNT(DISTINCT i.rid) AS incidentsNum
+                                 FROM airlines AS e
+                                 JOIN incidents AS i ON e.eid = i.airline
+                                 GROUP BY e.airlineName, month, `flight.phase`"
+df_incidentsNumOfMonthPhase <- dbGetQuery(conn, sql_incidentsNumOfMonthPhase)
+
+head(df_incidentsNumOfMonthPhase, 6)
+```
+
+**Q4**: Using the above dataframe, build a scatter plot that plots month along the x-axis versus number of incidents (across all airlines and flight phases).  
+
+Firstly I draw a scatter plot from the data frame `df_incidentsNumOfMonthPhase`, with `month` as the x-axis and `incidentNum` as the y-axis. Each plot represents one `airlineName` in one ` month` and one `flight.phase`. Meanwhile, the colors of plots are grouped according to 4 `flight.phase`.
+
+```{r visualization_1}
+ggplot(df_incidentsNumOfMonthPhase,
+       aes(x = month, y = incidentsNum)) + 
+    geom_point(aes(color = factor(flight.phase)),
+               alpha = 0.6,
+               size = 7) +
+    scale_x_continuous(breaks = seq(1, 12, by = 1)) +
+    theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank()) +
+    labs(x = "Incident Month",
+         y = "Number of Incidents",
+         color = "Flight Phase",
+         title = "Number of Incidents Each Airline By Flight Phase and Month")
+```
+
+However, as there are so many airlines in one month and one flight phase, the points get together at the same position and it becomes hard to know the general distribution features of incident numbers in different months and phases. So I draw another plot below.
+
+Before drawing the plot, I use `aggregate` to group the data frame `df_incidentsNumOfMonthPhase` by `month` and `flight.phase` to sum `incidentNum` across all `airlineName`. Then draw a new scatter plot based on the new data frame `df_incidentsSumOfMonthPhase`.
+
+```{r visualization_2}
+df_incidentsSumOfMonthPhase <- aggregate(incidentsNum  ~ month + flight.phase,
+                                         df_incidentsNumOfMonthPhase,
+                                         sum)
+
+ggplot(df_incidentsSumOfMonthPhase,
+       aes(x = month, y = incidentsNum)) + 
+    geom_point(aes(color = factor(flight.phase)),
+               alpha = 0.6,
+               size = 7) +
+    scale_x_continuous(breaks = seq(1, 12, by = 1)) +
+    theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank()) +
+    labs(x = "Incident Month",
+         y = "Number of Incidents",
+         color = "Flight Phase",
+         title = "Total Number of Incidents of All Airlines By Flight Phase and Month")
+```
+
+Clearly, this plot shows that the total number of incidents by flight phase would have trend: **inflight > landing ≈ takeoff**. And the trend by month would be: **highest in the fall, lowest in the spring**. To be more specific, the most dangerous situation would occur during `inflight` phase in the `September`.
+
+## 8. Stored Procedure in MySQL
+
+`DROP PROCEDURE` was executed before creating the stored procedure. This can be useful during code test and debug.
+
+```{r dropProcedure}
+dbExecute(conn, "DROP PROCEDURE IF EXISTS addIncidents")
+```
+
+Create the procedre `addIncidents` which takes 8 parameters as the input, as the `rid` should not be input by the user but be generated automatically.
+
+For any new airport, airline, or condition that can not be found in corresponding tables, a new record would be inserted in these tables as well as a new generated ID. The FKs in `incidents` would take these new IDs. 
+
+For any new flight phase that is not within `'takeoff', 'inflight', 'landing', 'unknown'`, the new phase would be changed to `'unknown'`.
+
+For any new altitude that is negative, the altitude would be changed to `0`.
+
+After all these special cases have been considered, insert the 'formatted' parameters to the `incidents` as a new record.
+
+```{r createProcedure}
+sql_createProcedure <- "CREATE PROCEDURE IF NOT EXISTS addIncidents(
+                            IN input_dep_date DATE,
+                            IN input_origin TEXT,
+                            IN input_airline TEXT,
+                            IN input_aircraft TEXT,
+                            IN input_flight_phase TEXT,
+                            IN input_altitude INTEGER,
+                            IN input_conditions TEXT,
+                            IN input_warned BOOLEAN)
+                        BEGIN
+                            SET @rid = (SELECT MAX(rid) + 1 FROM incidents);
+                            
+                            IF input_origin IN (SELECT airportName FROM airports) THEN
+                                SET @origin = (SELECT aid FROM airports WHERE airportName = input_origin);
+                            ELSE
+                                SET @origin = (SELECT MAX(aid) + 1 FROM airports);
+                                INSERT INTO airports VALUES (@origin, input_origin, '', 'unknown');
+                            END IF;
+                            
+                            IF input_airline IN (SELECT airlineName FROM airlines) THEN
+                                SET @airline = (SELECT eid FROM airlines WHERE airlineName = input_airline);
+                            ELSE
+                                SET @airline = (SELECT MAX(eid) + 1 FROM airlines);
+                                INSERT INTO airlines VALUES (@airline, input_airline, '', '');
+                            END IF;
+                            
+                            IF input_flight_phase NOT IN ('takeoff', 'inflight', 'landing', 'unknown') THEN
+                                SET @flight_phase = 'unknown';
+                            ELSE
+                                SET @flight_phase = input_flight_phase;
+                            END IF;
+                            
+                            IF input_altitude < 0 THEN
+                                SET @altitude = 0;
+                            ELSE
+                                SET @altitude = input_altitude;
+                            END IF;
+                            
+                            IF input_conditions IN (SELECT `condition` FROM conditions) THEN
+                                SET @conditions = (SELECT cid FROM conditions WHERE `condition` = input_conditions);
+                            ELSE
+                                SET @conditions = (SELECT MAX(cid) + 1 FROM conditions);
+                                INSERT INTO conditions VALUES (@conditions, input_conditions, '');
+                            END IF;
+                            
+                            INSERT INTO incidents VALUES (
+                                @rid,
+                                input_dep_date,
+                                @origin,
+                                @airline,
+                                input_aircraft,
+                                @flight_phase,
+                                @altitude,
+                                @conditions,
+                                input_warned);
+                        END;"
+dbExecute(conn, sql_createProcedure)
+```
+
+Pass a set of test data as arguments to call the stored procedure.
+
+```{r callProcedure}
+input_dep_date <- '2023-03-01'
+input_origin <- 'Boston Airport'
+input_airline <- 'Boston Air'
+input_aircraft <- 'Airplane'
+input_flight_phase <- 'landing'
+input_altitude <- 0
+input_conditions <- 'Sunny'
+input_warned <- TRUE
+
+dbExecute(conn, paste0('CALL addIncidents(',
+                       "'", input_dep_date, "', ",
+                       "'", input_origin, "', ",
+                       "'", input_airline, "', ",
+                       "'", input_aircraft, "', ",
+                       "'", input_flight_phase, "', ",
+                       input_altitude, ", ",
+                       "'", input_conditions, "', ",
+                       input_warned,
+                       ')'))
+```
+
+Show whether the stored procedure correctly inserted data into `incidents` and other tables if needed.
+
+```{r testProcedureResult_1}
+dbGetQuery(conn, "SELECT * FROM incidents ORDER BY rid DESC LIMIT 10")
+```
+
+```{r testProcedureResult_2}
+dbGetQuery(conn, "SELECT * FROM airports ORDER BY aid DESC LIMIT 10")
+```
+
+```{r testProcedureResult_3}
+dbGetQuery(conn, "SELECT * FROM conditions ORDER BY cid DESC LIMIT 10")
+```
+
+```{r testProcedureResult_4}
+dbGetQuery(conn, "SELECT * FROM airlines ORDER BY eid DESC LIMIT 10")
+```
+
+## 9. Disconnect to Database
+
+```{r disconnectDB}
+dbDisconnect(conn)
+```

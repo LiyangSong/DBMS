@@ -1,0 +1,62 @@
+---
+title: "Assignment / Query XML"
+author: "Liyang Song"
+date: "4/4/2023"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+## Q4
+
+Load the XML with the DTD into R using validation.
+
+```{r}
+require(XML)
+require(RSQLite)
+
+xmlfn <- "CustomersAndOrders.xml"
+xmlDOM <- xmlParse(file = xmlfn, validate = T)
+```
+
+## Q5
+
+Execute an XPath expression that returns the names of all customers that do not live in "MA"?
+
+```{r}
+xpathEx <- "//Customer[FullAddress/Region != 'MA']/ContactName"
+names <- xpathSApply(xmlDOM, xpathEx, xmlValue)
+names
+```
+
+## Q6
+
+Using the result returned in (5), count how many customers there are.
+
+```{r}
+length(names)
+```
+
+## Q7
+
+Using a combination of R and XPath, calculate the total amount paid for freight for all orders placed by customer with ID "GREAL".
+
+```{r}
+xpathEx <- "sum(//Order[CustomerID = 'GREAL']/ShipInfo/Freight)"
+freight <- xpathSApply(xmlDOM, xpathEx, xmlValue)
+cat("Total freight for all orders placed by customer with ID 'GREAL': ", freight)
+```
+
+## Q8
+
+Using a combination of R and XPath, calculate the average amount paid for freight for all orders shipped to the USA.
+
+```{r}
+xpathEx <- "//ShipInfo[ShipCountry = 'USA']/Freight"
+freights <- xpathSApply(xmlDOM, xpathEx, xmlValue)
+avg <- mean(as.numeric(freights))
+cat("Average freight for all orders shipped to the USA: ", avg)
+```
+

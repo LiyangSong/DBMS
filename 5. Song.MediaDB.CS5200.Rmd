@@ -1,0 +1,135 @@
+---
+title: "Song.MediaDB.CS5200"
+output: html_notebook
+---
+
+-   Name: Liyang Song
+-   Course: CS5200 23Spring
+-   Date: 2/13/2023
+
+## Connect to database file and initiate database connect
+
+```{r}
+library(RSQLite)
+
+fpath = getwd()
+dbfile = "MediaDB.db"
+
+dbcon <- dbConnect(RSQLite::SQLite(), paste0(fpath, "/", dbfile))
+
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+## Q1. What are the last name, city, state, and country of all customers who made at least one purchase and live either in Brazil or Canada? Do not list duplicates.
+
+```{sql connection=dbcon}
+SELECT CustomerId, LastName, City, State, Country
+FROM customers
+WHERE CustomerId IN (SELECT CustomerId FROM invoices)
+AND Country IN ('Brazil', 'Canada');
+```
+
+## Q2. What are the titles of each album and the number of tracks on each album?
+
+```{sql connection=dbcon}
+SELECT a.AlbumId, a.Title, COUNT(t.TrackId) AS TrackNum
+FROM albums AS a
+LEFT JOIN tracks AS t ON a.AlbumId = t.AlbumId
+GROUP BY a.AlbumID;
+```
+
+## Q3. List the number of tracks by genre, ordered from most to least, restricted to those genres for which there are at least five tracks.
+
+```{sql connection=dbcon}
+SELECT g.GenreId, g.Name, COUNT(t.TrackId) AS TrackNum
+FROM genres AS g
+LEFT JOIN tracks AS t ON g.GenreId = t.GenreId
+GROUP BY g.GenreID
+HAVING TrackNum >= 5
+ORDER BY TrackNum DESC;
+```
+
+## Q4. What is the average "tenure" of the employees in months, i.e., the time they have been working at our store? Use SQL to round the result to zero digit of precision, e.g., 23 instead of 23.4.
+
+```{sql connection=dbcon}
+SELECT ROUND(AVG((JULIANDAY('now') - JULIANDAY(HireDate))/365*12),0) AS AvgTenureMonth
+FROM employees;
+```
+
+## Q5. What are the total number of unique customers for each Brazilian state (e.g., MG, SP, etc.), ordered alphabetically by state, who made at least one purchase (i.e., do not consider customers who never made a purchase)?
+
+```{sql connection=dbcon}
+SELECT State, COUNT(CustomerId) AS CustomerNum
+FROM customers
+WHERE Country = 'Brazil'
+AND CustomerId IN (SELECT CustomerId FROM invoices)
+GROUP BY State
+ORDER BY State;
+```
+
+## Q6. How many customers never made a purchase, i.e., they appear in the customers table but not in the invoices table.
+
+```{sql connection=dbcon}
+SELECT COUNT(CustomerId) AS CustomerNum
+FROM customers
+WHERE CustomerId NOT IN (SELECT CustomerId FROM invoices);
+```
+
+## Q7. How many albums contain the substring "symphony" in the album title?
+
+```{sql connection=dbcon}
+SELECT COUNT(AlbumId) AS AlbumNum
+FROM albums
+WHERE Title LIKE '%symphony%';
+```
+
+## Q8. What is the total "time" of all tracks per artist in hours, i.e., add up the "Milliseconds" column in tracks? Display the artist's name and the time in hours rounded to two decimals. Only consider artists who published at least one track.
+
+```{sql connection=dbcon}
+SELECT ar.ArtistId, ar.Name, ROUND(SUM(t.Milliseconds)/1000.0/60.0/60.0, 2) AS TotalHours
+FROM artists AS ar
+INNER JOIN albums AS a on ar.ArtistId = a.ArtistId
+INNER JOIN tracks AS t on a.AlbumId = t.AlbumId
+GROUP BY ar.ArtistId;
+```
+
+## Q9. Which playlists are the longest (greater than 0), regardless of type and format? List the playlist name(s) and the time in two columns: one for hours and one for minutes.
+
+```{sql connection=dbcon}
+DROP VIEW IF EXISTS s;
+```
+
+```{sql connection=dbcon}
+CREATE VIEW s
+AS
+SELECT p.PlaylistId, p.Name, FLOOR(SUM(t.Milliseconds)/1000.0/60.0/60.0) AS Hours,  (ROUND(SUM(t.Milliseconds)/1000.0/60.0, 0) - FLOOR(SUM(t.Milliseconds)/1000.0/60.0/60.0) * 60) AS Minutes
+FROM playlists AS p
+INNER JOIN playlist_track AS pt ON p.PlaylistId = pt.PlaylistId
+INNER JOIN tracks AS t ON pt.TrackId = t.TrackId
+GROUP BY p.PlaylistID;
+```
+
+```{sql connection=dbcon}
+SELECT PlaylistId, Name, Hours, Minutes
+FROM s
+WHERE Hours = (SELECT MAX(Hours) FROM s)
+AND Minutes = (SELECT MAX(Minutes) FROM s WHERE Hours = (SELECT MAX(Hours) FROM s));
+```
+
+## Q10. Which artists have composed tracks in more than three different genres? List the artists name and the number of distinct genres they have compositions in. Do not list duplicates.
+
+```{sql connection=dbcon}
+SELECT ar.ArtistId, ar.Name, COUNT(DISTINCT g.GenreId) AS GenreNum
+FROM artists AS ar
+INNER JOIN albums AS a on ar.ArtistId = a.ArtistId
+INNER JOIN tracks AS t on a.AlbumId = t.AlbumId
+INNER JOIN genres AS g on t.GenreId = g.GenreId 
+GROUP BY ar.ArtistId
+HAVING GenreNum > 3;
+```
+
+## Close database connection
+
+```{r}
+dbDisconnect(dbcon)
+```

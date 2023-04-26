@@ -1,0 +1,263 @@
+---
+title: "Practicum II Analyze Data"
+author: "Liyang Song"
+course: "CS5200"
+date: "Spring 2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r initialize_connection}
+rm(list = ls())
+require(RMySQL)
+require(ggplot2)
+
+db_user <- 'root' 
+db_password <- 'liyang5200'
+db_name <- 'pubmed'
+db_host <- 'localHost'
+db_port <- 3306
+
+conn <-  dbConnect(RMySQL::MySQL(), 
+                   user = db_user, 
+                   password = db_password,
+                   dbname = db_name, 
+                   host = db_host, 
+                   port = db_port)
+```
+
+# Analytical Query I
+
+> Top five journals with the most articles published in them for the time period. Think about how you would best present this information so it is easily usable by an analyst or manager.
+
+The required information can be queried from fact and dimension tables in Part 2, as the number of articles has been aggregated in advance.
+
+As the time period is not specified in the question, we assume several conditions:
+
+1. all available time in the data set
+2. one specified year
+3. one specified quarter, no matter which year
+4. one specified month, no matter which year
+5. one continuous time period with start year and month and end year and month
+
+Five functions are defined according to different conditions:
+
+```{r query1_define_functions}
+# All time in the data set
+topJournals_total <- function(conn) {
+    sql <- "SELECT jd.journalDim_id, jd.title, SUM(jf.articleNum) AS articleNum
+            FROM journaldims jd
+            JOIN journalfacts jf USING (journalDim_id)
+            JOIN datedims dd USING (dateDim_id)
+            GROUP BY jd.journalDim_id
+            ORDER BY articleNum DESC
+            LIMIT 5"
+    return(dbGetQuery(conn, sql))
+}
+
+# Specified year as the parameter
+topJournals_year <- function(conn, year) {
+    sql <- paste0("SELECT jd.journalDim_id, jd.title, SUM(jf.articleNum) AS articleNum
+                   FROM journaldims jd
+                   JOIN journalfacts jf USING (journalDim_id)
+                   JOIN datedims dd USING (dateDim_id)
+                   WHERE dd.year=", year,
+                  " GROUP BY jd.journalDim_id
+                   ORDER BY articleNum DESC
+                   LIMIT 5")
+    return(dbGetQuery(conn, sql))
+}
+
+# Specified quarter as the parameter
+topJournals_quarter <- function(conn, quarter) {
+    sql <- paste0("SELECT jd.journalDim_id, jd.title, SUM(jf.articleNum) AS articleNum
+                   FROM journaldims jd
+                   JOIN journalfacts jf USING (journalDim_id)
+                   JOIN datedims dd USING (dateDim_id)
+                   WHERE dd.quarter=", quarter,
+                  " GROUP BY jd.journalDim_id
+                   ORDER BY articleNum DESC
+                   LIMIT 5")
+    return(dbGetQuery(conn, sql))
+}
+
+# Specified month as the parameter
+topJournals_month <- function(conn, month) {
+    sql <- paste0("SELECT jd.journalDim_id, jd.title, SUM(jf.articleNum) AS articleNum
+                   FROM journaldims jd
+                   JOIN journalfacts jf USING (journalDim_id)
+                   JOIN datedims dd USING (dateDim_id)
+                   WHERE dd.month=", month,
+                  " GROUP BY jd.journalDim_id
+                   ORDER BY articleNum DESC
+                   LIMIT 5")
+    return(dbGetQuery(conn, sql))
+}
+
+# One continuous time period
+# Start year and month and end year and month as parameters
+topJournals_period <- function(conn, startYear, startMonth, endYear, endMonth) {
+    sql <- paste0("SELECT jd.journalDim_id, jd.title, SUM(jf.articleNum) AS articleNum
+                   FROM journaldims jd
+                   JOIN journalfacts jf USING (journalDim_id)
+                   JOIN datedims dd USING (dateDim_id)
+                   WHERE dd.year BETWEEN ", startYear, " AND ", endYear,
+                  " AND (dd.year > ", startYear, " OR (dd.year = ", startYear, " AND dd.month >= ", endMonth, "))
+                   AND (dd.year < ", endYear, " OR (dd.year = ", endYear, " AND dd.month <= ", endMonth, "))
+                   GROUP BY jd.journalDim_id
+                   ORDER BY articleNum DESC
+                   LIMIT 5")
+    return(dbGetQuery(conn, sql))
+}
+```
+
+Then the user can call different functions according to their needs. The results would be tables with journal PK, title, article numbers. Here are several tests:
+
+This query shows the top 5 journals in the number of articles in the entire data set, as well as their PKs, titles, and article numbers.
+
+```{r query1_apply_function_1}
+topJournals_total(conn)
+```
+
+This query shows the top 5 journals in the number of articles published in quarter 1 of all years, as well as their PKs, titles, and article numbers.
+
+```{r query1_apply_function_2}
+topJournals_quarter(conn, "1")
+```
+This query shows the top 5 journals in the number of articles published from Oct 1975 to Jan 1978, as well as their PKs, titles, and article numbers.
+
+```{r query1_apply_function_3}
+topJournals_period(conn, "1975", "10", "1978", "1")
+```
+
+This query shows the top 5 journals in the number of articles published from Jan 1978 to Mar 1978, i.e. quarter 1 in 1978, as well as their PKs, titles, and article numbers.
+
+```{r query1_apply_function_4}
+topJournals_period(conn, "1978", "1", "1978", "3")
+```
+
+As the only scalar data in the results is article numbers, a table would be good enough to show results. Of course a bar chart can be applied to make results more vivid:
+
+```{r query1_define_plot}
+barchart <- function(df) {
+    ggplot(df, aes(x=reorder(title, articleNum), y=articleNum)) + 
+        geom_bar(stat="identity") +
+        coord_flip() + 
+        geom_text(aes(label=articleNum), hjust=1.6, color="white")
+}
+```
+
+Here are several tests:
+
+Top journals of the entire data set:
+
+```{r query1_apply_plot_1}
+barchart(topJournals_total(conn))
+```
+
+Top journals in the quarter 1 of all years:
+
+```{r query1_apply_plot_2}
+barchart(topJournals_quarter(conn, "1"))
+```
+
+Top journals from Oct 1975 to Jan 1978:
+
+```{r query1_apply_plot_3}
+barchart(topJournals_period(conn, "1975", "10", "1978", "1"))
+```
+
+# Analytical Query II
+
+> Number of articles per journal per year broken down by quarter. Again, think of a good way to show this. Is a table better than a visualization or is it better to use a visualization.
+
+As the query question does not specify which journal, we assume two conditions:
+
+1. Number of articles per year per quarter for all journals
+2. Number of articles per year per quarter for specified journals(e.g. top journals in Query I)
+
+Here we define two functions: `journalsBreakdown_total` would extract number of articles per year per quarter for all journals, and `journalsBreakdown_top` would extract specified journals from result of `journalsBreakdown_total`.
+
+Notice that some journals have publish quarter equals 0 because of the missed relevant elements in original XML, they would not be included in the result.
+
+```{r query2_define_functions}
+journalsBreakdown_total <- function(conn) {
+    sql <- "SELECT jd.journalDim_id, jd.title, dd.year, dd.quarter, SUM(jf.articleNum) AS articleNum
+            FROM journaldims jd
+            JOIN journalfacts jf USING (journalDim_id)
+            JOIN datedims dd USING (dateDim_id)
+            WHERE quarter != 0
+            GROUP BY jd.journalDim_id, dd.year, dd.quarter
+            ORDER BY jd.journalDim_id, dd.year, dd.quarter"
+    return(dbGetQuery(conn, sql))
+}
+
+journalsBreakdown_top <- function(conn, df) {
+    df.breakdown <- journalsBreakdown_total(conn)
+    return (df.breakdown[df.breakdown$journalDim_id %in% df$journalDim_id, ])
+}
+```
+
+Then the user can call functions to show number of articles per year per quarter for either all journals or specified journals. Here are some tests:
+
+This query shows number of articles breakdown by quarter by year for all journals, as well as journal PKs and titles.
+
+```{r query2_apply_function_1}
+journalsBreakdown_total(conn)
+```
+
+This query shows number of articles breakdown by quarter by year for top journals in the entire data set.
+
+```{r query2_apply_function_2}
+journalsBreakdown_top(conn, topJournals_total(conn))
+```
+
+This query shows number of articles breakdown by quarter by year for top journals in quarter 1 of all years.
+
+```{r query2_apply_function_3}
+journalsBreakdown_top(conn, topJournals_quarter(conn, "1"))
+```
+
+This query shows number of articles breakdown by quarter by year for top journals from Jan 1978 to Mar 1978 (quarter 1 in 1978).
+
+```{r query2_apply_function_4}
+journalsBreakdown_top(conn, topJournals_period(conn, "1978", "1", "1978", "3"))
+```
+
+For number of articles per year per quarter of all journals, a table would be better than visualization because of the many number of journals (around 2000 rows in `JournalDims`).
+
+However, for limited number of journals, stack bar chart can be a great way to show the result more visualized. It can also be straight forward to show the article number distribution among quarters for top journals, which may be useful in a periodical report. 
+
+```{r query2_define_plot}
+stackBar <- function(df) {
+   ggplot(df, aes(x = year, y = articleNum, fill = quarter)) +
+    geom_bar(position="stack", stat="identity") +
+    facet_grid(rows = vars(reorder(title, -articleNum))) +
+    labs(x = "Journal", y = "Number of Articles",
+    title = "Number of Articles per Journal per Quarter") +
+    theme(strip.text.y = element_text(angle = 0))
+}
+
+```
+
+Each facet in the grid is one journal, each bar in the bar chart is one year, and each layer in the stacked bar is one quarter. Here are some tests:
+
+Article numbers breakdown by quarter by year for top journals in the entire data set:
+
+```{r query2_apply_plot_1}
+stackBar(journalsBreakdown_top(conn, topJournals_total(conn)))
+```
+
+Article numbers breakdown by quarter by year for top journals from Jan 1978 to Mar 1978 (quarter 1 in 1978):
+
+```{r r query2_apply_plot_2}
+stackBar(journalsBreakdown_top(conn, topJournals_period(conn, "1978", "1", "1978", "3")))
+```
+
+```{r disconnect_to_database}
+dbDisconnect(conn)
+rm(list = ls())
+```

@@ -1,0 +1,247 @@
+---
+title: "Assignment / Explore Query Planning"
+author: "Liyang Song"
+date: "3/21/2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+## Preliminary Tasks
+
+```{r remove_objects}
+rm(list = ls())
+```
+
+```{r connect_to_sqlite}
+require(RSQLite)
+fpath <- getwd()
+dbfile <- 'sakila.db'
+sqlite_conn <- dbConnect(RSQLite::SQLite(), paste0(fpath, '/', dbfile))
+```
+
+```{r connect_to_mysql}
+require(RMySQL)
+
+db_user <- 'root' 
+db_password <- 'liyang5200'
+db_name <- 'sakila'
+db_host <- 'localhost'
+db_port <- 3306
+
+mysql_conn <-  dbConnect(RMySQL::MySQL(), 
+                   user = db_user, 
+                   password = db_password,
+                   dbname = db_name, 
+                   host = db_host, 
+                   port = db_port)
+```
+
+```{r check_sqlite}
+dbGetQuery(sqlite_conn, 'SELECT * FROM sqlite_master')
+```
+
+```{r check_mysql}
+dbGetQuery(mysql_conn, 'SELECT * FROM INFORMATION_SCHEMA.INNODB_INDEXES')
+```
+
+## Question 1
+
+> Ensuring that no user-defined indexes exist (delete all user-defined indexes, if there are any), find the number of films per category. The query should return the category name and the number of films in each category. Show us the code that determines if there are any indexes and the code to delete them if there are any.
+
+```{r check_indexes_sqlite}
+user_defined_indexes_sqlite <- dbGetQuery(sqlite_conn, "SELECT name
+                                                        FROM sqlite_master
+                                                        WHERE type = 'index'
+                                                        AND sql IS NOT NULL")
+
+
+if (nrow(user_defined_indexes_sqlite) > 0) {
+    for (name in user_defined_indexes_sqlite$name) {
+        dbExecute(sqlite_conn, paste0('DROP INDEX ', name))
+        cat('User-defined indexes in SQLite have been droped: ', name)
+    }
+} else {
+    print('No user-defined index found in SQLite')
+}
+```
+
+```{r execute_query_q1_sqlite}
+query_q1 <- 'SELECT c.category_id, c.name, COUNT(fc.film_id) AS filmNum
+             FROM category AS c
+             LEFT JOIN film_category AS fc ON c.category_id = fc.category_id
+             GROUP BY c.category_id, c.name'
+dbGetQuery(sqlite_conn, query_q1)
+```
+
+## Question 2
+
+> Ensuring that no user-defined indexes exist (delete all user-defined indexes, if there are any), execute the same query (same SQL) as in (1) but against the MySQL database. Make sure you reuse the same SQL query string as in (1).
+
+```{r check_indexes_mysql}
+user_defined_indexes_mysql <- dbGetQuery(mysql_conn, 'SELECT i.INDEX_ID, i.NAME AS index_name, t.NAME AS table_name
+                                                      FROM INFORMATION_SCHEMA.INNODB_INDEXES AS i
+                                                      JOIN INFORMATION_SCHEMA.INNODB_TABLES AS t
+                                                      ON i.TABLE_ID = t.TABLE_ID
+                                                      WHERE i.INDEX_ID > 871')
+
+
+if (nrow(user_defined_indexes_mysql) > 0) {
+    for (i in 1:nrow(user_defined_indexes_mysql)) {
+        index_name <- user_defined_indexes_mysql$index_name[i]
+        table_name <- strsplit(user_defined_indexes_mysql$table_name[i], "/")[[1]][2]
+        dbExecute(mysql_conn, paste0('DROP INDEX ', index_name, ' ON ', table_name))
+        cat('User-defined indexes in MySQL have been droped: ', index_name)
+    }
+} else {
+    print('No user-defined index found in MySQL')
+}
+```
+
+```{r execute_query_q1_mysql}
+dbGetQuery(mysql_conn, query_q1)
+```
+
+## Question 3
+
+> Find out how to get the query plans for SQLite and MySQL and then display the query plans for each of the query executions in (1) and (2).
+
+```{r query_plans_q1_sqlite}
+dbGetQuery(sqlite_conn, paste0('EXPLAIN QUERY PLAN ', query_q1))
+```
+
+```{r query_plans_q1_mysql}
+dbGetQuery(mysql_conn, paste0('EXPLAIN ', query_q1))
+```
+
+
+## Question 4
+
+> Comment on the differences between the query plans? Are they the same? How do they differ? Why do you think they differ? Do both take the same amount of time?
+
+The query plan for SQLite contains 2 steps: table `category` was scanned row by row, then an automatically generated index was used to search column `category_id` in table `film_category`.
+
+The query plan for MySQL contains 2 steps: table `category` was scanned row by row, then an index `fk_film_category_category` was used to search column `category_id` in table `film_category`.
+
+The patterns are similar, SQLite uses automatically generated index while MySQL uses existing index, yet both refer to the same column.
+
+Both the first steps consume $O(n)$ time and the second steps consume $O(logn)$ time, so the total running time of two queries should be similar.
+
+```{r time_of_query_q1_sqlite}
+bt <- Sys.time()
+dbExecute(sqlite_conn, query_q1)
+et <- Sys.time()
+
+time_of_query_q1_sqlite <- et - bt
+cat("Time elapsed in SQLite: ", time_of_query_q1_sqlite * 1000, " ms")
+```
+
+```{r time_of_query_q1_mysql}
+bt <- Sys.time()
+dbExecute(mysql_conn, query_q1)
+et <- Sys.time()
+
+time_of_query_q1_mysql <- et - bt
+cat("Time elapsed in MySQL: ", time_of_query_q1_mysql * 1000, " ms")
+```
+
+## Question 5
+
+> Write a SQL query against the SQLite database that returns the title, language and length of the film with the title "ZORRO ARK".
+ 
+```{r execute_query_q5}
+query_q5 <- "SELECT f.film_id, f.title, l.name AS language_name, f.length
+             FROM film AS f
+             LEFT JOIN language as l ON f.language_id = l.language_id
+             WHERE title = 'ZORRO ARK'"
+dbGetQuery(sqlite_conn, query_q5)
+```
+ 
+## Question 6
+
+> For the query in (5), display the query plan.
+
+```{r query_plans_q5}
+dbGetQuery(sqlite_conn, paste0('EXPLAIN QUERY PLAN ', query_q5))
+```
+
+## Question 7
+
+> In the SQLite database, create a user-defined index called "TitleIndex" on the column TITLE in the table FILM.
+
+```{r create_index_TitleIndex}
+dbExecute(sqlite_conn, 'CREATE INDEX TitleIndex ON film(title)')
+```
+
+## Question 8
+
+> Re-run the query from (5) now that you have an index and display the query plan.
+
+```{r query_plans_q5_with_index}
+dbGetQuery(sqlite_conn, paste0('EXPLAIN QUERY PLAN ', query_q5))
+```
+
+## Question 9
+
+> Are the query plans the same in (6) and (8)? What are the differences? Is there a difference in execution time? How do you know from the query plan whether it uses an index or not?
+
+The query plan in (6) contains 2 steps: table `film` was scanned row by row, then an automatically generated primary key was used to search table `language`. The first step consumes $O(n)$ time, and the second step consumes $O(logn)$ time (PK is stored in B-tree format).
+
+The query plan in (8) contains 2 steps: the new created index `TitleIndex` was used to search column `title` in table `film`, then an automatically generated primary key was used to search table `language`. Both first step and second step consume $O(logn)$ time.
+
+The query in (8) should be faster than query in (6) a bit. However in several tests, the speeds in (8) are similar or even slower than (6). The possible reason may be that the row number of table `film` is relatively small (1000 rows) and the running time of scanning or searching `film` is small. The total running time would be mainly affected by other factors.
+
+```{r time_of_query_q5_without_index}
+dbExecute(sqlite_conn, 'DROP INDEX IF EXISTS TitleIndex')
+
+bt <- Sys.time()
+dbExecute(sqlite_conn, query_q5)
+et <- Sys.time()
+
+time_without_index <- et - bt
+
+cat("Time elapsed without index: ", time_without_index * 1000, " ms")
+```
+
+```{r time_of_query_q5_with_index}
+dbExecute(sqlite_conn, 'CREATE INDEX IF NOT EXISTS TitleIndex ON film(title)')
+
+bt <- Sys.time()
+dbExecute(sqlite_conn, query_q5)
+et <- Sys.time()
+
+time_with_index <- et - bt
+
+cat("Time elapsed with index: ", time_with_index * 1000, " ms")
+```
+
+## Question 10
+
+> Write a SQL query against the SQLite database that returns the title, language and length of all films with the word "GOLD" with any capitalization in its name, i.e., it should return "Gold Finger", "GOLD FINGER", "THE GOLD FINGER", "Pure GOLD" (these are not actual titles).
+
+```{r execute_query_q10}
+query_q10 <- "SELECT f.film_id, f.title, l.name AS language_name, f.length
+              FROM film AS f
+              LEFT JOIN language as l ON f.language_id = l.language_id
+              WHERE title LIKE '%GOLD%'"
+dbGetQuery(sqlite_conn, query_q10)
+```
+
+## Question 11
+
+> Get the query plan for (10). Does it use the index you created? If not, why do you think it didn't? 
+
+The query plan for (10) shows that index `TitleIndex` was not used. The reason is that an approximate search using `LIKE` was used, under which an index is not useful as indexes work with exact matches. And the database would scan row by row.
+
+```{r query_plans_q10_with_index}
+dbGetQuery(sqlite_conn, paste0('EXPLAIN QUERY PLAN ', query_q10))
+```
+
+## Disconnect to Database
+
+```{r disconnect_to_DB}
+dbDisconnect(mysql_conn)
+dbDisconnect(sqlite_conn)
+```

@@ -1,0 +1,182 @@
+---
+title: "Song.CRDB.CS5200"
+output: html_notebook
+---
+
+- Name: Liyang Song
+- Course: CS5200 23Spring
+- Date: 2/7/2023
+
+The original ER Diagram has been edited to deal with many-to-many relationship and a lookup table was added. Check the new ERD [**here**](https://lucid.app/lucidchart/920be975-48a4-413f-b5ca-5c8410c99419/edit?viewport_loc=-304%2C-86%2C1917%2C774%2COx9uyAtKxg0w&invitationId=inv_833a8424-fed1-49a0-9c2a-05785a462e07).
+
+## 1. Create database file and initiate database connection.
+
+```{r}
+library(RSQLite)
+
+fpath = "C:/users/Leon/documents/NEU/CS5200/Assignment4/"
+dbfile = "ModuleAuthor.sqlite"
+
+dbcon <- dbConnect(RSQLite::SQLite(), paste0(fpath, dbfile))
+
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+## 2. Create table **Module**.
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE Module(
+  mID TEXT,
+  title TEXT NOT NULL,
+  lengthInMin INTEGER NOT NULL,
+  PRIMARY KEY (mID)
+);
+```
+
+## 3. Create table **Affiliation**
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Affiliation
+```
+
+```{sql connection=dbcon}
+CREATE TABLE Affiliation(
+  affID INTEGER,
+  name TEXT NOT NULL,
+  PRIMARY KEY (affID)
+)
+```
+
+## 4. Create table **Author**
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Author;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE Author(
+  aid INTEGER,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affID INTEGER,
+  PRIMARY KEY (aid),
+  FOREIGN KEY (affID) REFERENCES Affiliation (affID) ON DELETE SET NULL ON UPDATE CASCADE
+);
+```
+
+## 5. Create table **ModuleAuthor**
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE ModuleAuthor(
+  maID INTEGER,
+  mID TEXT NOT NULL,
+  aID INTEGER NOT NULL,
+  PRIMARY KEY (maID),
+  FOREIGN KEY (mID) REFERENCES Module (mID) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (aID) REFERENCES Author (aid) ON DELETE CASCADE ON UPDATE CASCADE
+);
+```
+
+## 6. Fill tables with test data
+
+```{sql connection=dbcon}
+INSERT INTO Module VALUES
+  ("CS5200", "Database Management Systems", 200),
+  ("DS5110", "Intro to Data Management", 180),
+  ("CS5800", "Algorithms", 300);
+```
+
+```{sql connection=dbcon}
+INSERT INTO Affiliation VALUES
+  (1, "PT"),
+  (2, "FT"),
+  (3, "Contract");
+```
+
+```{sql connection=dbcon}
+INSERT INTO Author VALUES
+  (1, "David", "david@northeastern.edu", 1),
+  (2, "Sophia", "sophia@northeastern.edu", 1),
+  (3, "Allen", "allen@northeastern.edu", 2);
+```
+
+```{sql connection=dbcon}
+INSERT INTO ModuleAuthor VALUES
+  (1, "CS5200", 3),
+  (2, "DS5110", 3),
+  (3, "CS5800", 1);
+```
+
+## 7. Check table contents
+
+```{sql connection=dbcon}
+SELECT * FROM Module;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Affiliation;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Author;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+## 8. Test extensibility of affiliation
+
+```{sql connection=dbcon}
+INSERT INTO Affiliation VALUES
+  (4, "Intern"),
+  (5, "Third-Party");
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Affiliation;
+```
+
+## 9. Test behavior for foreign keys
+
+**SET NULL behavior**
+
+```{sql connection=dbcon}
+DELETE FROM Affiliation WHERE affID = 2;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Affiliation;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Author;
+```
+
+**CASCADE behavior**
+
+```{sql connection=dbcon}
+DELETE FROM Module WHERE mID = "CS5800";
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Module;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+## 10. Close database connection
+
+```{r}
+dbDisconnect(dbcon)
+```

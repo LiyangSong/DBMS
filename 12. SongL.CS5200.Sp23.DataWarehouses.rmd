@@ -1,0 +1,80 @@
+---
+title: "Assignment / Explore Data Warehouses"
+author: "Liyang Song"
+date: "4/10/2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+## Q1
+
+Data warehouses are often constructed using relational databases. Explain the use of fact tables and star schemas to construct a data warehouse in a relational database. Also comment on whether a transactional database can and should be used to OLAP.
+
+ 
+**Solution**
+
+- The data in a **data warehouse** is usually **multidimensional** with **measure attributes** and *dimension attributes**. The measure attributes record quantitative data that can be aggregated by some dimensions. And the dimension attributes define these dimensions.
+
+- **Fact tables** contain measure attributes as well as foreign keys to **dimension tables**. The measure attributes are typically quantitative data during business process, which would be prepared to be analyzed. And therefore they are usually the main part of a data warehouse.
+
+- **dimension tables** contain information regarding each dimension. Their sizes are usually much smaller.
+
+- **Star Schemas** are simplest data warehouse schema consisting of one fact table and several dimension tables that link to the fact table. Star Schemas are applied to make data easier and faster to be queried, especially for *ad hoc* queries which are part of the main purpose of a Data Warehouse.
+
+    - For instance, sale amount of each order should be recorded in a fact table, as well as the sales person id, store id, region id, etc. as foreign keys. And all these dimensions should be an individual dimension table.
+
+- A transactional database should ignore to use **Online Analytical Processing (OLAP)**.            
+    - Transactional databases are designed to handle real-time transactions which usually envolve a few records for each operation, while OLAP are designed to handle large-amount and complex queries and analytics. 
+    
+    - Transactional databases usually take predefined operations, while OLAP always take *ad hoc* queries.
+    
+    - As a result, OLAP typically contains denormalized and pre-aggregated data, which can impact the performance of transactional databases.
+
+    - Transactional database should always be updated to make sure the data reflects the correct information of entities, while OLAP contains historical records that can be used to make trend analytics and can not be overwritten by end users.
+
+## Q2
+
+Explain the difference between a data warehouse, a data mart, and a data lake. Provide at least one example of their use from your experience or how you believe they might be used in practice. Find at least one video, article, or tutorial online that explains the differences and embed that into your notebook.
+
+**Solution**
+
+- **Data Warehouse** is a repository of relational databases from both internal and external various sources. Its schema is usually designed and optimized to fulfill some *ad hoc* and complex analytical queris.
+
+    - Example: My previous company, a pharma company, use Data Warehouse to analyze sales data for different sales team, regions, product categories, brands, etc. to make sales performance analytics, make prediction for future sales, manage inventories, etc. 
+
+- **Data Mart** is a subset of Data Warehouse that is designed for one particular business function, such as sales, marketing, etc. The subset is optimized and may pre-aggregated for required queries or analytics.
+
+    - Example: The sales department in the pharma company would use a Data Mart to analyze sales performance (sales amount in different teams, regions, sales growth trend, performance of different categories, etc.). On the other hand, the marketing department in the company would use another data mart to analyze customer features to make advertising strategies.
+    
+- **Data Lake** is also a repository of data but with all types, including structured, semistructured, and unstructured. The schemas are not predefined but defined when taking analytics, which means the data is structured at the time of analytics. Data Lake has lower cost and higher flexibility than Data Warehouses.
+
+    - Example: The medical device company may use Data Lake to store device records and patient data, which require high storage volume and priority cost over performance.
+
+- A [tutorial](https://aws.amazon.com/compare/the-difference-between-a-data-warehouse-data-lake-and-data-mart/) explaining in detail the differences between data warehouse, data mart, and data lake.
+
+## Q3
+
+After the general explanation of fact tables and star schemas, design an appropriate fact table for Practicum I's bird strike database. Of course, there are many fact tables one could build, so pick some analytics problem and design a fact table for that. Be sure to explain your approach and design reasons. Just design it (perhaps draw an ERD for it); you do not need to actually implement it or populate it with data (of course, you may do so if you wish in preparation for the next practicum).
+
+**Solution**
+
+- The fact table should contain each bird accident as one record. The amount of accidents are the data to be aggregated. And the analytical dimensions may consider: airport, model, airline, origin, flight phase, sky condition, etc. 
+
+- A Fact Table for Practicum I's bird strike database, also seen in [ERD in LucidChart](https://lucid.app/lucidchart/cc098731-9e59-4969-b4a1-0cb168a5788c/edit?viewport_loc=202%2C241%2C1916%2C846%2C0_0&invitationId=inv_a714616a-cf4b-4c24-bfde-aa725e93c9ae):
+
+```{r}
+knitr::include_graphics("https://i.imgur.com/4sSEDxo.png")
+```
+
+- The idea is creating dimension tables for each dimension, and add FKs in the fact table to link each dimension table. The fact table stores each bird accident and its date and altitude.
+
+- When to analyze, the data in fact table can be aggregated by one of the dimensions. For instance: the number of accidents in sky condition `Some Cloud`, or the average altitude of accidents for flight phase `Landing Roll`.
+
+
+
+
+
+

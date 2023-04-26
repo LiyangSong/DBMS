@@ -1,0 +1,229 @@
+---
+title: "Assignment / Store XML in a Database"
+author: "Liyang Song"
+date: "4/4/2023"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+## Q1
+
+Create a normalized (BCNF) relational schema and visualize the schema in an ERD (in Crow's Feet/IE Notation) for the data in the XML file.
+
+[ERD in LucidChart](https://lucid.app/lucidchart/635860c7-d9cc-4f90-80a2-ea35ce406ec8/edit?viewport_loc=31%2C-10%2C1277%2C564%2C0_0&invitationId=inv_96bb09dc-4137-4d5a-a478-b10f8ba9c6ed)
+
+```{r}
+knitr::include_graphics("https://i.imgur.com/GYwugGP.png")
+```
+
+## Q2
+
+Create a SQLite database that implements the schema
+
+```{r}
+rm(list = ls())
+
+require(XML)
+require(RSQLite)
+
+dbfile <- "books.db"
+fpath <- getwd()
+conn <- dbConnect(RSQLite::SQLite(), paste0(fpath, '/', dbfile))
+```
+
+```{r}
+dbExecute(conn, "DROP TABLE IF EXISTS Book")
+dbExecute(conn, "DROP TABLE IF EXISTS Author")
+dbExecute(conn, "DROP TABLE IF EXISTS Genre")
+```
+
+```{r}
+sql <- "CREATE TABLE IF NOT EXISTS Author (
+            aid INTEGER PRIMARY KEY,
+            author TEXT)"
+dbExecute(conn, sql)
+
+sql <- "CREATE TABLE IF NOT EXISTS Genre (
+            gid INTEGER PRIMARY KEY,
+            genre TEXT)"
+dbExecute(conn, sql)
+
+sql <- "CREATE TABLE IF NOT EXISTS Book (
+            bid INTEGER,
+            aid INTEGER,
+            title TEXT,
+            edition TEXT,
+            gid INTEGER,
+            price NUMERIC,
+            publish_date DATE,
+            description TEXT,
+            PRIMARY KEY (bid),
+            FOREIGN KEY (aid) REFERENCES Author(aid),
+            FOREIGN KEY (gid) REFERENCES Genre(gid))"
+dbExecute(conn, sql)
+```
+
+## Q3
+
+Load the XML data from the file into R data frames; you will need to use either node-by-node traversal of the XML tree or a combination of node-by-node traversal with XPath; you likely will not be able to accomplish it with only XPath. Use surrogate keys and/or the ID attributes in the XML to establish relationships.
+
+```{r}
+xmlDOM <- xmlParse("Books-v3.xml")
+root <- xmlRoot(xmlDOM)
+num_books <- xmlSize(root)
+
+df.book <- data.frame(bid = vector (mode = "integer",
+                                    length = num_books),
+                      aid = vector (mode = "integer",
+                                    length = num_books),
+                      title = vector (mode = "character",
+                                      length = num_books),
+                      edition = vector (mode = "character",
+                                        length = num_books),
+                      gid = vector (mode = "integer",
+                                    length = num_books),
+                      price = vector (mode = "numeric",
+                                      length = num_books),
+                      publish_date = vector (mode = "character",
+                                             length = num_books),
+                      description = vector (mode = "character",
+                                            length = num_books),
+                      stringsAsFactors = F)
+
+df.author <- data.frame(aid = integer(),
+                        author = character(),
+                        stringsAsFactors = F)
+
+df.genre <- data.frame(gid = integer(),
+                       genre = character(),
+                       stringsAsFactors = F)
+```
+
+```{r}
+authorList = list()
+genreList = list()
+
+for (i in 1:num_books) {
+    abook <- root[[i]]
+    df.book$bid[i] <- as.integer(substring(xmlGetAttr(abook, "id"), 3, 5))
+    df.book$title[i] <- xpathSApply(abook, "./title", xmlValue)
+    df.book$price[i] <- as.numeric(xpathSApply(abook, "./price", xmlValue))
+    df.book$publish_date[i] <- xpathSApply(abook, "./publish_date", xmlValue)
+    df.book$description[i] <- xpathSApply(abook, "./description", xmlValue)
+    
+    edition <- xpathSApply(abook, "./edition", xmlValue)
+    if (length(edition) == 0) {
+        edition <- ""
+    }
+    df.book$edition[i] <- edition
+    
+    author <- xpathSApply(abook, "./author", xmlValue)
+    if (!(author %in% authorList)) {
+        authorList <- append(authorList, author)
+        num_authors <- length(authorList)
+        df.author <- rbind(df.author, data.frame(aid = num_authors, 
+                                                 author = author, 
+                                                 stringsAsFactors = FALSE))
+    }
+    
+    genre <- xpathSApply(abook, "./genre", xmlValue)
+    if (!(genre %in% genreList)) {
+        genreList <- append(genreList, genre)
+        num_genres <- length(genreList)
+        df.genre <- rbind(df.genre, data.frame(gid = num_genres, 
+                                               genre = genre, 
+                                               stringsAsFactors = FALSE))
+    }
+}
+```
+
+```{r}
+for (i in 1:num_books) {
+    abook <- root[[i]]
+    author <- xpathSApply(abook, "./author", xmlValue)
+    genre <- xpathSApply(abook, "./genre", xmlValue)
+    df.book$aid[i] <- df.author$aid[which(df.author$author == author)]
+    df.book$gid[i] <- df.genre$gid[which(df.genre$genre == genre)]
+}
+
+```
+
+```{r}
+df.book
+```
+
+```{r}
+df.author
+```
+
+```{r}
+df.genre
+```
+
+## Q4
+
+Transform data types as necessary and then save the data frames to the appropriate tables in the database using a strategy of your choice (e.g., dbWriteTable()).
+
+```{r}
+dbWriteTable(conn, "Book", df.book, overwrite = F, append = T, row.names = F)
+dbWriteTable(conn, "Author", df.author, overwrite = F, append = T, row.names = F)
+dbWriteTable(conn, "Genre", df.genre, overwrite = F, append = T, row.names = F)
+```
+
+```{r}
+dbGetQuery(conn, "SELECT * FROM Book")
+```
+
+```{r}
+dbGetQuery(conn, "SELECT * FROM Author")
+```
+
+```{r}
+dbGetQuery(conn, "SELECT * FROM Genre")
+```
+
+## Q5
+
+Once the data from the XML is in the database, build SQL chunks for the following queries against the SQLite database:
+
+### A. What is the number of genres have at least three books?
+
+```{sql, connection=conn}
+SELECT COUNT(*) AS GenreNumWithThreeBooks
+FROM (
+    SELECT g.gid, COUNT(b.bid) AS BookNum
+    FROM Genre g
+    JOIN Book b ON g.gid=b.gid
+    GROUP BY g.gid
+    HAVING BookNum >= 3
+) AS GenreWithThreeBooks
+```
+
+### B. What is the oldest year in which a publication was published?
+
+```{sql, connection=conn}
+SELECT MIN(strftime('%Y', publish_date)) AS OldestYear
+FROM Book
+```
+
+### C. Find the number of books and average price for each genre.
+
+```{sql, connection=conn}
+SELECT g.genre, COUNT(b.bid) AS BookNum, AVG(b.price) AS AvgPrice
+FROM Genre g
+JOIN Book b ON g.gid=b.gid
+GROUP BY g.genre
+```
+
+### D. List the title and author of all books that are less than 0.8*AVG or more than 1.2*AVG, where AVG is the average price of all books.
+
+```{sql, connection=conn}
+SELECT b.title, a.author
+FROM Book b
+JOIN Author a ON b.aid=a.aid
+WHERE b.price < 0.8 * (SELECT AVG(price) FROM Book)
+OR b.price > 1.2 * (SELECT AVG(price) FROM Book)
+```

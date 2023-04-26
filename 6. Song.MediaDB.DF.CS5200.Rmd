@@ -1,0 +1,105 @@
+---
+title: "Song.MediaDB.DF.CS5200"
+output: html_notebook
+---
+
+-   Name: Liyang Song
+-   Course: CS5200 23Spring
+-   Date: 2/13/2023
+
+## Connect to database file and initiate database connect
+
+```{r}
+library(RSQLite)
+library(proto)
+library(gsubfn)
+library(sqldf)
+
+fpath = getwd()
+dbfile = "MediaDB.db"
+
+dbcon <- dbConnect(RSQLite::SQLite(), paste0(fpath, "/", dbfile))
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+## Send table invoice_items to dataframe rs, and add new column ItemPrice to rs 
+
+```{r}
+rs <- dbGetQuery(dbcon, "SELECT * FROM invoice_items")
+rs$ItemPrice = rs$UnitPrice * rs$Quantity
+
+head(rs, 15)
+```
+
+## Q1 What is the 10% trimmed mean of the item prices (rounded to 2 decimals)? 
+
+```{r}
+sql <- "SELECT AVG(ItemPrice) AS TrimmedMean
+       FROM rs as i
+       WHERE ((SELECT COUNT(ItemPrice)
+               FROM rs AS ii
+               WHERE ii.ItemPrice <= i.ItemPrice) >=
+                   0.05 * (SELECT COUNT(ItemPrice) FROM rs))
+       AND
+             ((SELECT COUNT(ItemPrice)
+               FROM rs AS jj
+               WHERE jj.ItemPrice >= i.ItemPrice) >=
+                   0.05 * (SELECT COUNT(ItemPrice) FROM rs))"
+sqldf(sql)
+```
+
+## Q2 The total amount for each invoice (i.e., the sum of the extended prices for the invoice_items in each invoice) and the number of items in the invoice.
+
+```{r}
+sql <- "SELECT InvoiceId, SUM(ItemPrice) AS TotalAmount, COUNT(InvoiceLineId) AS ItemNum
+        FROM rs
+        GROUP BY InvoiceId"
+iv <- sqldf(sql)
+iv
+```
+
+## Q3 Using R and the result from the prior question, create a line chart of the total number of items in an invoice (x axis) versus the total amount of an invoice (i.e., the total paid) (y axis). Add proper axis labels.
+
+```{R}
+plot(iv$ItemNum, iv$TotalAmount, main = "Amount Against Number of Items in An Invoice", xlab = "total number of items", ylab = "total amount")
+
+abline(lm(iv$ItemNum ~ iv$TotalAmount), col = "red")
+```
+
+## Q4 Applies a 10% discount to the total amount for each invoice if it has more than 10 items and stores that discounted amount in a new column in the invoices table called DiscPrice. If the invoice has 10 or fewer items of the same or of different items, then there is no discount and the DiscPrice is the original price.
+
+```{r}
+# dbExecute(dbcon, "ALTER TABLE invoices DROP COLUMN DiscPrice")
+dbExecute(dbcon, "ALTER TABLE invoices ADD COLUMN DiscPrice NUMERIC(10, 2)")
+
+IvMoreId <- subset(iv, ItemNum > 10, select = c("InvoiceId", "TotalAmount"))
+IvLessId <- subset(iv, ItemNum <= 10, select = c("InvoiceId", "TotalAmount"))
+
+for (i in 1:nrow(IvMoreId)) {
+  id <- IvMoreId[i, 1]
+  am <- IvMoreId[i, 2]
+  
+  dbExecute(dbcon, paste0("UPDATE invoices
+        SET DiscPrice = ROUND(0.9 * ", am, ",2) WHERE InvoiceId = ", id))
+}
+
+for (j in 1:nrow(IvLessId)) {
+  id <- IvLessId[j, 1]
+  am <- IvLessId[j, 2]
+  
+  dbExecute(dbcon, paste0("UPDATE invoices
+        SET DiscPrice = ROUND(", am, ",2) WHERE InvoiceId = ", id))
+}
+```
+
+## Q5 Show that the update in Q4
+
+```{r}
+dbGetQuery(dbcon, "SELECT * FROM invoices LIMIT 20")
+```
+
+## Close database connection
+
+```{r}
+dbDisconnect(dbcon)
+```

@@ -1,0 +1,326 @@
+---
+title: "Song.DBTriggers.CS5200"
+output: html_notebook
+---
+
+- Name: Liyang Song
+- Course: CS5200 23Spring
+- Date: 2/20/2023
+
+The original ER Diagram has been edited to deal with many-to-many relationship, and a lookup table and a log table were added. Check the new ERD [**here**](https://lucid.app/lucidchart/3b1cb7f4-0d65-4165-b960-0625fb41c9ce/edit?viewport_loc=-296%2C-125%2C1277%2C516%2COx9uyAtKxg0w&invitationId=inv_37daab7e-c1ad-4d95-89d2-a5bd8c363d64).
+
+## 1. Create database file and initiate database connection.
+
+```{r}
+library(RSQLite)
+
+fpath = getwd()
+dbfile = "DBTriggers.sqlite"
+
+dbcon <- dbConnect(RSQLite::SQLite(), paste0(fpath, "/", dbfile))
+
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+## 2. Create table **Module**, **Affiliation**, **Author**, **ModuleAuthor**, **Log**.
+
+### Module
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS Module(
+  mID TEXT,
+  title TEXT NOT NULL,
+  lengthInMin INTEGER NOT NULL,
+  PRIMARY KEY (mID)
+);
+```
+
+### Affiliation
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Affiliation;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS Affiliation(
+  affID INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL
+);
+```
+
+### Author
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Author;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS Author(
+  aid INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affID INTEGER,
+  FOREIGN KEY (affID) REFERENCES Affiliation (affID) ON DELETE SET NULL ON UPDATE CASCADE
+);
+```
+
+### ModuleAuthor
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS ModuleAuthor(
+  maID INTEGER PRIMARY KEY AUTOINCREMENT,
+  mID TEXT NOT NULL,
+  aID INTEGER NOT NULL,
+  FOREIGN KEY (mID) REFERENCES Module (mID) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (aID) REFERENCES Author (aid) ON DELETE CASCADE ON UPDATE CASCADE
+);
+```
+
+### Log
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Log
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS Log(
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    DT TEXT NOT NULL
+);
+```
+
+## 3. Create trigger **InsertLogs**, **UpdateLogs**, **DeleteLogs**, **AuthorNumPerModule**.
+
+### InsertLogs
+
+Trigger `InsertLogs` will add a record of any insertion to table `ModuleAuthor`. The recorded information includes `maID`, `mID`, `aID`, as well as a time stamp.
+
+```{sql connection=dbcon}
+DROP TRIGGER IF EXISTS InsertLogs
+```
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS InsertLogs
+AFTER INSERT ON ModuleAuthor
+  FOR EACH ROW
+  BEGIN
+    INSERT INTO Log(action, DT)
+    VALUES (("Insert maID="||NEW.maID||" with mID="||NEW.mID||" and aID="||NEW.aID), DATETIME('NOW'));
+  END;
+```
+
+### UpdateLogs
+
+Trigger `UpdateLogs` will add a record of any update to table `ModuleAuthor`. The recorded information includes `maID`, `mID`, `aID`, as well as a time stamp.
+
+```{sql connection=dbcon}
+DROP TRIGGER IF EXISTS UpdateLogs
+```
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS UpdateLogs
+AFTER UPDATE ON ModuleAuthor
+  FOR EACH ROW
+  BEGIN
+    INSERT INTO Log(action, DT)
+    VALUES (("Update maID="||NEW.maID||" from mID="||OLD.mID||" and aID="||OLD.aID||" to mID="||NEW.mID||" and aID="||NEW.aID), DATETIME('NOW'));
+  END;
+```
+
+### DeleteLogs
+
+Trigger `DeleteLogs` will add a record of any deletion to table `ModuleAuthor`. The recorded information includes `maID`, `mID`, `aID`, as well as a time stamp.
+
+```{sql connection=dbcon}
+DROP TRIGGER IF EXISTS DeleteLogs
+```
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS DeleteLogs
+AFTER DELETE ON ModuleAuthor
+  FOR EACH ROW
+  BEGIN
+    INSERT INTO Log(action, DT)
+    VALUES (("Delete maID="||OLD.maID||" with mID="||OLD.mID||" and aID="||OLD.aID), DATETIME('NOW'));
+  END;
+```
+
+### AuthorNumPerModule
+
+Trigger `AuthorNumPerModule` will set a limit on the total number of authors per module in table `ModuleAuthor`.
+
+When a new insertion occurs and the total number of authors per module will exceed the limit, any extra value will be deleted. As a result, only limited number of values will be shown in the table `ModuleAuthor`, yet all actions including insertion and deletion can be recorded in the table `Log`.
+
+```{sql connection=dbcon}
+DROP TRIGGER IF EXISTS AuthorNumPerModule
+```
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS AuthorNumPerModule AFTER INSERT ON ModuleAuthor
+  FOR EACH ROW
+  WHEN (SELECT COUNT(DISTINCT aID) FROM ModuleAuthor WHERE mID = NEW.mID) > 3
+  BEGIN
+    DELETE FROM ModuleAuthor
+    WHERE maID = NEW.maID;
+  END;
+```
+
+## 4. Check database triggers.
+
+```{sql connection=dbcon}
+SELECT * FROM sqlite_master WHERE TYPE = 'trigger';
+```
+
+## 5. Fill tables with test data and check table contents.
+
+### Module
+
+```{sql connection=dbcon}
+INSERT INTO Module VALUES
+  ("CS5200", "Database Management Systems", 200),
+  ("DS5110", "Intro to Data Management", 180),
+  ("CS5800", "Algorithms", 300);
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Module;
+```
+
+### Affiliation
+
+```{sql connection=dbcon}
+INSERT INTO Affiliation (name) VALUES
+  ("PT"),
+  ("FT"),
+  ("Contract");
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Affiliation;
+```
+
+### Author
+
+```{sql connection=dbcon}
+INSERT INTO Author (name, email, affID) VALUES
+  ("David", "david@northeastern.edu", 1),
+  ("Sophia", "sophia@northeastern.edu", 1),
+  ("Allen", "allen@northeastern.edu", 2),
+  ("Eric", "eric@northeastern.edu", 3),
+  ("Natalia", "natalia@northeastern.edu", 3);
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Author;
+```
+
+### ModuleAuthor
+
+```{sql connection=dbcon}
+INSERT INTO ModuleAuthor (mID, aID) VALUES
+  ("CS5200", 3),
+  ("DS5110", 3),
+  ("CS5800", 1);
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+### Log
+
+```{sql connection=dbcon}
+SELECT * FROM Log;
+```
+
+## 6. Test trigger **InsertLogs**.
+
+A test with a new insertion to the `ModuleAuthor`. The information of this action was recorded in the `Log` successfully.
+
+```{sql connection=dbcon}
+INSERT INTO ModuleAuthor (mID, aID) VALUES
+  ("DS5110", 4);
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Log;
+```
+
+## 7. Test trigger **UpdateLogs**.
+
+A test with a new update to the `ModuleAuthor`. The information of this action was recorded in the `Log` successfully.
+
+```{sql connection=dbcon}
+UPDATE ModuleAuthor
+SET aID=2
+WHERE mID="CS5800"
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Log;
+```
+
+## 8. Test trigger **DeleteLogs**.
+
+A test with a new deletion to the `ModuleAuthor`. The information of this action was recorded in the `Log` successfully.
+
+```{sql connection=dbcon}
+DELETE FROM ModuleAuthor
+WHERE mID="CS5200"
+```
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Log;
+```
+
+## 8. Test trigger **AuthorNumPerModule**.
+
+A test with several new insertion to the `ModuleAuthor`.
+
+**Four** authors were added to associate with module "CS5200", yet only the first three ones were inserted. The reason is that we set a limit of author number per module as **three**. And the forth one was inserted but then deleted by the trigger.
+
+Meanwhile, the information of all actions was recorded in the `Log` successfully.
+
+```{sql connection=dbcon}
+INSERT INTO ModuleAuthor (mID, aID) VALUES
+  ("CS5200", 1),
+  ("CS5200", 2),
+  ("CS5200", 4),
+  ("CS5200", 5);
+```
+
+
+```{sql connection=dbcon}
+SELECT * FROM ModuleAuthor;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Log;
+```
+
+## 9. Close database connection.
+
+```{r}
+dbDisconnect(dbcon)
+```
